@@ -159,7 +159,7 @@ const plugin = definePlugin({
       });
 
       // Sync skills to agent
-      const synced = await syncSkillsToAgent(ctx, agentId, mergedSkills);
+      const synced = await syncSkillsToAgent(ctx, agentId, companyId, mergedSkills);
 
       // Record debounce
       debounceEntries.push({
@@ -259,27 +259,19 @@ const plugin = definePlugin({
       const evtCompanyId = event.companyId ?? "";
       if (!agentId || !runId || !evtCompanyId) return;
 
-      // Try to read the run's log to find skill reads
+      // Track skill reads from routed skills state
+      // (Full run log analysis requires http access; for now mark routed skills as read
+      //  when the run completes successfully — conservative approximation)
       try {
-        const resp = await ctx.http.fetch(
-          `/api/heartbeat/runs/${runId}/log`,
-          { method: "GET" },
-        );
-        if (!resp.ok) return;
+        const routedState = await ctx.state.get(
+          { scopeKind: "instance", stateKey: `routed-skills:${agentId}` },
+        ) as { desiredSkills?: string[] } | null;
 
-        const logText = await resp.text();
-        // Look for skill file reads: read_file .skills/{key}/SKILL.md
-        const skillReads = new Set<string>();
-        const pattern = /\.skills\/([^/]+)\/SKILL\.md/g;
-        let match;
-        while ((match = pattern.exec(logText)) !== null) {
-          skillReads.add(match[1]);
-        }
-
-        if (skillReads.size === 0) return;
+        if (!routedState?.desiredSkills?.length) return;
 
         const state = await loadState(ctx, evtCompanyId);
-        for (const key of skillReads) {
+        // Mark routed skills as "read" when run finishes (approximation)
+        for (const key of routedState.desiredSkills) {
           if (!state.skillUsageStats[key]) {
             state.skillUsageStats[key] = {
               routed: 0,
@@ -296,10 +288,10 @@ const plugin = definePlugin({
         ctx.logger.debug("Tracked skill reads", {
           agentId,
           runId,
-          skillsRead: Array.from(skillReads),
+          skillCount: routedState.desiredSkills.length,
         });
       } catch {
-        // Best effort — run log may not be available
+        // Best effort
       }
     });
 
@@ -319,17 +311,13 @@ const plugin = definePlugin({
       if (!agentEntityId) return;
 
       try {
-        const resp = await ctx.http.fetch(
-          `/api/agents/${agentEntityId}`,
-          { method: "GET" },
-        );
-        if (!resp.ok) return;
-        const agent = (await resp.json()) as Record<string, unknown>;
+        const agent = await ctx.agents.get(agentEntityId, event.companyId ?? "");
+        if (!agent) return;
         const config = (agent.adapterConfig ?? {}) as Record<string, unknown>;
         const sync = (config.paperclipSkillSync ?? {}) as Record<string, unknown>;
-        const desired = sync.desiredSkills;
+        const desired = sync.desiredSkills ?? config.desiredSkills;
         if (Array.isArray(desired)) {
-          const skills = desired.filter((s): s is string => typeof s === "string");
+          const skills = desired.filter((s: unknown): s is string => typeof s === "string");
           await refreshBaseline(ctx, agentEntityId, skills);
         }
       } catch {

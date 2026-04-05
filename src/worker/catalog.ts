@@ -3,23 +3,8 @@ import { buildTfidfVectors } from "./keyword-matcher.js";
 
 const CATALOG_STATE_KEY = "skill-catalog";
 
-interface PluginContext {
-  state: {
-    get(key: unknown): Promise<unknown>;
-    set(key: unknown, value: unknown): Promise<void>;
-  };
-  companies: {
-    list(): Promise<Array<{ id: string }>>;
-  };
-  logger: {
-    info(msg: string, meta?: Record<string, unknown>): void;
-    warn(msg: string, meta?: Record<string, unknown>): void;
-    debug(msg: string, meta?: Record<string, unknown>): void;
-  };
-  http: {
-    fetch(url: string, options?: Record<string, unknown>): Promise<{ ok: boolean; status: number; json(): Promise<unknown> }>;
-  };
-}
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+type PluginContext = any;
 
 function catalogKey(companyId: string) {
   return { scopeKind: "company", companyId, stateKey: CATALOG_STATE_KEY };
@@ -37,7 +22,9 @@ export async function loadCatalog(
 }
 
 /**
- * Fetch the skill catalog from Paperclip API, compute TF-IDF vectors, and cache.
+ * Build skill catalog by scanning all agents' desiredSkills.
+ * Skill keys are typically descriptive (e.g., "igic-calculation-helper"),
+ * so we use them as both key and name for TF-IDF matching.
  */
 export async function refreshCatalog(
   ctx: PluginContext,
@@ -45,28 +32,32 @@ export async function refreshCatalog(
 ): Promise<CachedSkillCatalog> {
   ctx.logger.info("Refreshing skill catalog", { companyId });
 
-  let skills: CatalogSkill[] = [];
+  const skillSet = new Map<string, CatalogSkill>();
+
   try {
-    const resp = await ctx.http.fetch(
-      `/api/companies/${companyId}/skills`,
-      { method: "GET" },
-    );
-    if (resp.ok) {
-      const data = (await resp.json()) as Array<Record<string, unknown>>;
-      skills = data.map((s) => ({
-        key: s.key as string,
-        name: s.name as string,
-        description: (s.description as string) ?? null,
-        slug: s.slug as string,
-      }));
-    } else {
-      ctx.logger.warn("Failed to fetch skill catalog", { status: resp.status });
+    // Scan all agents to discover skills in use
+    const agents = await ctx.agents.list({ companyId }) as Array<Record<string, unknown>>;
+    for (const agent of agents) {
+      const config = (agent.adapterConfig ?? {}) as Record<string, unknown>;
+      const sync = (config.paperclipSkillSync ?? {}) as Record<string, unknown>;
+      const desired = sync.desiredSkills ?? config.desiredSkills;
+      if (Array.isArray(desired)) {
+        for (const key of desired) {
+          if (typeof key === "string" && !skillSet.has(key)) {
+            // Convert key to human-readable name: "igic-calculation-helper" → "igic calculation helper"
+            const name = key.replace(/[-_]/g, " ");
+            skillSet.set(key, { key, name, description: null, slug: key });
+          }
+        }
+      }
     }
   } catch (err) {
-    ctx.logger.warn("Error fetching skill catalog", { error: String(err) });
+    ctx.logger.warn("Error scanning agents for skills", { error: String(err) });
   }
 
-  // Build TF-IDF vectors from skill names + descriptions
+  const skills = Array.from(skillSet.values());
+
+  // Build TF-IDF vectors from skill names
   const { vectors, idf } = buildTfidfVectors(skills);
 
   const catalog: CachedSkillCatalog = {
