@@ -42,9 +42,11 @@ export async function refreshCatalog(
       const sync = (config.paperclipSkillSync ?? {}) as Record<string, unknown>;
       const desired = sync.desiredSkills ?? config.desiredSkills;
       if (Array.isArray(desired)) {
-        for (const key of desired) {
-          if (typeof key === "string" && !skillSet.has(key)) {
-            // Convert key to human-readable name: "igic-calculation-helper" → "igic calculation helper"
+        for (const rawKey of desired) {
+          if (typeof rawKey !== "string") continue;
+          // Normalize: "paperclipai/paperclip/paperclip" → "paperclip", "local/send-email/send-email" → "send-email"
+          const key = rawKey.includes("/") ? rawKey.split("/").pop()! : rawKey;
+          if (!skillSet.has(key)) {
             const name = key.replace(/[-_]/g, " ");
             skillSet.set(key, { key, name, description: null, slug: key });
           }
