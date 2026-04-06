@@ -92,6 +92,97 @@ function timeAgo(iso: string): string {
   return `${Math.floor(diff / 86_400_000)}d ago`;
 }
 
+/** Normalize "paperclipai/paperclip/paperclip" → "paperclip" */
+function shortSkillKey(key: string): string {
+  return key.includes("/") ? key.split("/").pop()! : key;
+}
+
+// ── Collapsible Decision Row ────────────────────────────────
+
+function DecisionRow({ decision: d }: { decision: RoutingDecision }) {
+  const [open, setOpen] = useState(false);
+  const topSkills = d.dynamicSkills.slice(0, 3);
+  const skillSummary = topSkills.length > 0
+    ? topSkills.map((s) => shortSkillKey(s.skillKey)).join(", ")
+    : "no match";
+
+  return (
+    <div
+      style={{
+        borderBottom: "1px solid rgba(255,255,255,0.04)",
+        fontSize: "0.8rem",
+      }}
+    >
+      {/* Collapsed: one-line summary */}
+      <div
+        onClick={() => setOpen(!open)}
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 8,
+          padding: "6px 0",
+          cursor: "pointer",
+          userSelect: "none",
+        }}
+      >
+        <span style={{ fontSize: "0.7rem", opacity: 0.4, width: 12, flexShrink: 0 }}>
+          {open ? "▾" : "▸"}
+        </span>
+        <span style={{ color: "rgba(255,255,255,0.8)", flexShrink: 0, minWidth: 80 }}>
+          {d.agentName}
+        </span>
+        <span style={{
+          color: "rgba(255,255,255,0.45)",
+          fontSize: "0.75rem",
+          flex: 1,
+          overflow: "hidden",
+          textOverflow: "ellipsis",
+          whiteSpace: "nowrap",
+        }}>
+          {d.issueTitle.substring(0, 50)}
+        </span>
+        <span style={{ ...muted, fontSize: "0.7rem", flexShrink: 0 }}>
+          {skillSummary}
+        </span>
+        <span style={badge(
+          MODE_COLORS[d.matchMode]?.bg ?? "rgba(255,255,255,0.1)",
+          MODE_COLORS[d.matchMode]?.fg ?? "rgba(255,255,255,0.7)",
+        )}>
+          {d.matchMode.replace("hybrid_", "")}
+        </span>
+        <span style={{ ...muted, fontSize: "0.65rem", flexShrink: 0 }}>
+          {timeAgo(d.timestamp)}
+        </span>
+      </div>
+
+      {/* Expanded: full detail */}
+      {open && (
+        <div style={{ paddingLeft: 20, paddingBottom: 8 }}>
+          <div style={{ color: "rgba(255,255,255,0.55)", fontSize: "0.75rem", marginBottom: 4 }}>
+            {d.issueTitle}
+          </div>
+          <div style={{ display: "flex", gap: 4, flexWrap: "wrap", marginBottom: 4 }}>
+            {d.dynamicSkills.map((s) => (
+              <span
+                key={s.skillKey}
+                style={badge("rgba(59,130,246,0.15)", "rgb(147,197,253)")}
+              >
+                {shortSkillKey(s.skillKey)} ({Math.round(s.score * 100)}%)
+              </span>
+            ))}
+            {d.dynamicSkills.length === 0 && (
+              <span style={{ ...muted, fontSize: "0.7rem" }}>no dynamic skills matched</span>
+            )}
+          </div>
+          <div style={{ ...muted, fontSize: "0.7rem" }}>
+            {d.latencyMs}ms · {d.finalSkills.length} total skills · permanent: {d.permanentSkills.map(shortSkillKey).join(", ") || "none"}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ══════════════════════════════════════════════════════════════
 // Dashboard Widget
 // ══════════════════════════════════════════════════════════════
@@ -184,46 +275,8 @@ export function SkillRouterWidget() {
           {state.recentDecisions.length === 0 ? (
             <div style={{ ...muted, fontStyle: "italic" }}>No routing decisions yet</div>
           ) : (
-            state.recentDecisions.slice(0, 8).map((d) => (
-              <div
-                key={d.id}
-                style={{
-                  padding: "6px 0",
-                  borderBottom: "1px solid rgba(255,255,255,0.04)",
-                  fontSize: "0.8rem",
-                }}
-              >
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                  <span style={{ color: "rgba(255,255,255,0.8)" }}>
-                    {d.agentName}
-                  </span>
-                  <span style={badge(
-                    MODE_COLORS[d.matchMode]?.bg ?? "rgba(255,255,255,0.1)",
-                    MODE_COLORS[d.matchMode]?.fg ?? "rgba(255,255,255,0.7)",
-                  )}>
-                    {d.matchMode}
-                  </span>
-                </div>
-                <div style={{ color: "rgba(255,255,255,0.55)", fontSize: "0.75rem" }}>
-                  {d.issueTitle.substring(0, 80)}{d.issueTitle.length > 80 ? "..." : ""}
-                </div>
-                <div style={{ display: "flex", gap: 8, marginTop: 2 }}>
-                  {d.dynamicSkills.map((s) => (
-                    <span
-                      key={s.skillKey}
-                      style={badge("rgba(59,130,246,0.15)", "rgb(147,197,253)")}
-                    >
-                      {s.skillKey} ({Math.round(s.score * 100)}%)
-                    </span>
-                  ))}
-                  {d.dynamicSkills.length === 0 && (
-                    <span style={{ ...muted, fontSize: "0.7rem" }}>no dynamic skills matched</span>
-                  )}
-                </div>
-                <div style={{ ...muted, fontSize: "0.7rem", marginTop: 2 }}>
-                  {timeAgo(d.timestamp)} &middot; {d.latencyMs}ms &middot; {d.finalSkills.length} total skills
-                </div>
-              </div>
+            state.recentDecisions.slice(0, 12).map((d) => (
+              <DecisionRow key={d.id} decision={d} />
             ))
           )}
         </div>
@@ -251,7 +304,7 @@ export function SkillRouterWidget() {
                     style={{ borderBottom: "1px solid rgba(255,255,255,0.04)" }}
                   >
                     <td style={{ padding: "4px 6px", color: "rgba(255,255,255,0.8)" }}>
-                      {s.key}
+                      {shortSkillKey(s.key)}
                     </td>
                     <td style={{ padding: "4px 6px", textAlign: "right", ...muted }}>
                       {s.routed}
